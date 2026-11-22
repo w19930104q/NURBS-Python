@@ -26,6 +26,7 @@ __all__ = [
     "construct",
     "convert",
     "CPGen",
+    "discretize",
     "elements",
     "evaluators",
     "exchange",

@@ -1,5 +1,9 @@
 # geomdl Changelog
 
+## Unreleased
+
+* Added `discretize` module for adaptive curve discretization driven by curvature (midpoint sagitta) and arc length criteria with independently recomputable error; uniform sampling interface is unchanged
+
 ## v5.3.0 released on 2020-08-05
 
 * Deprecated some methods that produce incorrect results
