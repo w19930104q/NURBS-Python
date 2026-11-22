@@ -8,6 +8,7 @@
 """
 
 from .linalg import linspace
+from .exceptions import GeomdlException
 from ._utilities import export
 
 
@@ -100,7 +101,15 @@ def normalize(knot_vector, decimals=18):
 def check(degree, knot_vector, num_ctrlpts):
     """Checks the validity of the input knot vector.
 
-    Please refer to The NURBS Book (2nd Edition), p.50 for details.
+    The following rules are enforced (please refer to The NURBS Book (2nd Edition), p.50 for details):
+
+    * the knot vector length must conform to the equality :math:`m = n + p + 1`
+    * knots must be in non-decreasing (ascending) order
+    * multiplicity of the first and the last knots must not exceed ``degree + 1``
+    * multiplicity of the interior knots must not exceed ``degree + 1``
+
+    Invalid input raises :class:`.GeomdlException` with a ``data`` attribute describing the offending
+    knot(s), so that the problem can be located inside the input knot vector.
 
     :param degree: degree of the curve or the surface
     :type degree: int
@@ -108,7 +117,7 @@ def check(degree, knot_vector, num_ctrlpts):
     :type knot_vector: list, tuple
     :param num_ctrlpts: number of control points
     :type num_ctrlpts: int
-    :return: True if the knot vector is valid, False otherwise
+    :return: True if the knot vector is valid
     :rtype: bool
     """
     try:
@@ -122,13 +131,54 @@ def check(degree, knot_vector, num_ctrlpts):
 
     # Check the formula; m = p + n + 1
     if len(knot_vector) != degree + num_ctrlpts + 1:
-        return False
+        raise GeomdlException(
+            "Knot vector length does not conform to the rule m = p + n + 1",
+            data=dict(degree=degree, num_ctrlpts=num_ctrlpts, expected=degree + num_ctrlpts + 1, actual=len(knot_vector)),
+        )
 
-    # Check ascending order
-    prev_knot = knot_vector[0]
-    for knot in knot_vector:
-        if prev_knot > knot:
-            return False
-        prev_knot = knot
+    # Check ascending (non-decreasing) order
+    for idx in range(1, len(knot_vector)):
+        if knot_vector[idx] < knot_vector[idx - 1]:
+            raise GeomdlException(
+                "Knot vector must be in non-decreasing order",
+                data=dict(index=idx, knot=knot_vector[idx], prev_knot=knot_vector[idx - 1]),
+            )
+
+    # Maximum allowed multiplicity for any knot value
+    max_mult = degree + 1
+
+    # Check the repetition (multiplicity) of the first knot
+    start_mult = 1
+    while start_mult < len(knot_vector) and knot_vector[start_mult] == knot_vector[0]:
+        start_mult += 1
+    if start_mult > max_mult:
+        raise GeomdlException(
+            "Multiplicity of the first knot exceeds the allowed maximum",
+            data=dict(knot=knot_vector[0], multiplicity=start_mult, max_multiplicity=max_mult),
+        )
+
+    # Check the repetition (multiplicity) of the last knot
+    end_mult = 1
+    while end_mult < len(knot_vector) and knot_vector[-(end_mult + 1)] == knot_vector[-1]:
+        end_mult += 1
+    if end_mult > max_mult:
+        raise GeomdlException(
+            "Multiplicity of the last knot exceeds the allowed maximum",
+            data=dict(knot=knot_vector[-1], multiplicity=end_mult, max_multiplicity=max_mult),
+        )
+
+    # Check the multiplicity of the interior knots
+    idx = start_mult
+    interior_end = len(knot_vector) - end_mult
+    while idx < interior_end:
+        mult = 1
+        while idx + mult < interior_end and knot_vector[idx + mult] == knot_vector[idx]:
+            mult += 1
+        if mult > max_mult:
+            raise GeomdlException(
+                "Multiplicity of the interior knot at index " + str(idx) + " exceeds the allowed maximum",
+                data=dict(knot=knot_vector[idx], multiplicity=mult, max_multiplicity=max_mult, index=idx),
+            )
+        idx += mult
 
     return True

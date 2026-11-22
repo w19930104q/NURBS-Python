@@ -56,15 +56,20 @@ def test_check_knot_vector1():
 
 
 def test_check_knot_vector2():
-    to_check = knotvector.check(4, (1, 2, 3, 4), 12)
-    result = False
-    assert to_check == result
+    # knot vector length does not conform to the rule m = p + n + 1
+    with pytest.raises(GeomdlException) as exc_info:
+        knotvector.check(4, (1, 2, 3, 4), 12)
+    assert exc_info.value.data["expected"] == 17
+    assert exc_info.value.data["actual"] == 4
 
 
 def test_check_knot_vector3():
-    to_check = knotvector.check(3, (5, 3, 6, 5, 4, 5, 6), 3)
-    result = False
-    assert to_check == result
+    # knot vector is not in non-decreasing order
+    with pytest.raises(GeomdlException) as exc_info:
+        knotvector.check(3, (5, 3, 6, 5, 4, 5, 6), 3)
+    assert exc_info.value.data["index"] == 1
+    assert exc_info.value.data["knot"] == 3
+    assert exc_info.value.data["prev_knot"] == 5
 
 
 def test_check_knot_vector4():
@@ -80,6 +85,77 @@ def test_check_knot_vector5():
     num_ctrlpts = 12
     with pytest.raises(TypeError):
         knotvector.check(degree=degree, num_ctrlpts=num_ctrlpts, knot_vector=5)
+
+
+# Fixed knot vector families for validating knotvector.check
+
+# Valid families: (degree, knot_vector, num_ctrlpts)
+VALID_KNOT_VECTORS = [
+    # clamped, uniform, no interior repetition
+    (3, [0.0, 0.0, 0.0, 0.0, 0.25, 0.5, 0.75, 1.0, 1.0, 1.0, 1.0], 7),
+    # clamped with interior repetition up to the degree
+    (3, [0.0, 0.0, 0.0, 0.0, 0.5, 0.5, 0.5, 1.0, 1.0, 1.0, 1.0], 7),
+    # clamped with interior repetition equal to degree + 1 (full discontinuity)
+    (2, [0.0, 0.0, 0.0, 0.5, 0.5, 0.5, 1.0, 1.0, 1.0], 6),
+    # Bezier-type (no interior knots)
+    (4, [0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0], 5),
+    # unclamped, uniform
+    (3, [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0], 5),
+    # unclamped with interior repetition
+    (2, [0.0, 0.25, 0.5, 0.5, 0.75, 1.0], 3),
+    # non-normalized domain
+    (2, [-5.0, -5.0, -5.0, -2.0, 3.0, 5.0, 5.0, 5.0], 5),
+]
+
+
+@pytest.mark.parametrize("degree,knot_vector,num_ctrlpts", VALID_KNOT_VECTORS)
+def test_check_knot_vector_valid_family(degree, knot_vector, num_ctrlpts):
+    assert knotvector.check(degree, knot_vector, num_ctrlpts) is True
+
+
+def test_check_knot_vector_first_knot_multiplicity():
+    # first knot repeats degree + 2 times
+    degree = 2
+    kv = [0.0, 0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0]
+    with pytest.raises(GeomdlException) as exc_info:
+        knotvector.check(degree, kv, 5)
+    assert exc_info.value.data["knot"] == 0.0
+    assert exc_info.value.data["multiplicity"] == 4
+    assert exc_info.value.data["max_multiplicity"] == degree + 1
+
+
+def test_check_knot_vector_last_knot_multiplicity():
+    # last knot repeats degree + 2 times
+    degree = 2
+    kv = [0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0, 1.0]
+    with pytest.raises(GeomdlException) as exc_info:
+        knotvector.check(degree, kv, 5)
+    assert exc_info.value.data["knot"] == 1.0
+    assert exc_info.value.data["multiplicity"] == 4
+    assert exc_info.value.data["max_multiplicity"] == degree + 1
+
+
+def test_check_knot_vector_interior_knot_multiplicity():
+    # interior knot repeats degree + 2 times
+    degree = 2
+    kv = [0.0, 0.0, 0.0, 0.5, 0.5, 0.5, 0.5, 1.0, 1.0, 1.0]
+    with pytest.raises(GeomdlException) as exc_info:
+        knotvector.check(degree, kv, 7)
+    assert exc_info.value.data["knot"] == 0.5
+    assert exc_info.value.data["multiplicity"] == 4
+    assert exc_info.value.data["max_multiplicity"] == degree + 1
+    assert exc_info.value.data["index"] == 3
+
+
+def test_check_knot_vector_non_monotonic():
+    # descending pair inside the knot vector
+    degree = 3
+    kv = [0.0, 0.0, 0.0, 0.0, 0.75, 0.5, 1.0, 1.0, 1.0, 1.0]
+    with pytest.raises(GeomdlException) as exc_info:
+        knotvector.check(degree, kv, 6)
+    assert exc_info.value.data["index"] == 5
+    assert exc_info.value.data["knot"] == 0.5
+    assert exc_info.value.data["prev_knot"] == 0.75
 
 
 def test_normalize_knot_vector1():

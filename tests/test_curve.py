@@ -3,12 +3,14 @@
 Requires "pytest" to run.
 """
 
+import pytest
 from pytest import fixture, mark
 from geomdl import BSpline
 from geomdl import evaluators
 from geomdl import helpers
 from geomdl import convert
 from geomdl import operations
+from geomdl.exceptions import GeomdlException
 
 GEOMDL_DELTA = 0.001
 
@@ -39,6 +41,24 @@ def test_bspline_curve_ctrlpts(spline_curve):
 
 def test_bspline_curve_knot_vector(spline_curve):
     assert spline_curve.knotvector == [0.0, 0.0, 0.0, 0.0, 0.33, 0.66, 1.0, 1.0, 1.0, 1.0]
+
+
+@mark.parametrize(
+    "bad_kv",
+    [
+        # first knot multiplicity exceeds degree + 1
+        [0.0, 0.0, 0.0, 0.0, 0.0, 0.66, 1.0, 1.0, 1.0, 1.0],
+        # last knot multiplicity exceeds degree + 1
+        [0.0, 0.0, 0.0, 0.0, 0.33, 1.0, 1.0, 1.0, 1.0, 1.0],
+        # interior knot multiplicity exceeds degree + 1
+        [0.0, 0.0, 0.0, 0.0, 0.5, 0.5, 0.5, 0.5, 0.5, 1.0],
+        # non-monotonic knot vector
+        [0.0, 0.0, 0.0, 0.0, 0.66, 0.33, 1.0, 1.0, 1.0, 1.0],
+    ],
+)
+def test_bspline_curve_invalid_knot_vector_rejected(spline_curve, bad_kv):
+    with pytest.raises(GeomdlException):
+        spline_curve.knotvector = bad_kv
 
 
 @mark.parametrize(
