@@ -14,6 +14,9 @@ from .exceptions import GeomdlException
 # Initialize an empty __all__ for controlling imports
 __all__ = []
 
+# Relative tolerance for detecting vanishing 1st-order partial derivatives on degenerate surface positions
+_DEGENERATE_DERIV_TOL = 1e-12
+
 
 def tangent_curve_single(obj, u, normalize):
     """Evaluates the curve tangent vector at the given parameter value.
@@ -57,6 +60,99 @@ def tangent_curve_single_list(obj, param_list, normalize):
     return tuple(ret_vector)
 
 
+def _boundary_limit_sign(param, domain_start, domain_end):
+    """Returns the sign of the one-sided limit direction at the given parametric position.
+
+    A degenerate boundary of the parametric domain can only be approached from the inside of the domain.
+    Therefore, limit directions approaching the lower boundary get a positive sign and limit directions
+    approaching the upper boundary get a negative sign.
+
+    :param param: parameter value
+    :type param: float
+    :param domain_start: start of the parametric domain
+    :type domain_start: float
+    :param domain_end: end of the parametric domain
+    :type domain_end: float
+    :return: 1.0 if the position is closer to the start of the domain, -1.0 otherwise
+    :rtype: float
+    """
+    return 1.0 if abs(param - domain_start) <= abs(param - domain_end) else -1.0
+
+
+def _surface_tangent_frame(obj, uv):
+    """Evaluates the surface point and the u- and v-tangent vectors at the given (u, v) parameter pair.
+
+    On degenerate parametric positions, e.g. collapsed (degenerate) edges where one or both of the 1st-order
+    partial derivatives vanish, the vanishing derivative vectors are replaced by their limit directions
+    computed from the 2nd-order partial derivatives. This keeps the tangent frame, and therefore the surface
+    normal, consistent with the limiting values approached from the regular neighborhood of the degenerate
+    position, including the corners of the parametric domain.
+
+    :param obj: input surface
+    :type obj: abstract.Surface
+    :param uv: (u,v) parameter pair
+    :type uv: list or tuple
+    :return: surface point, derivative w.r.t. u and derivative w.r.t. v (or their limit directions)
+    :rtype: tuple
+    """
+    # Tangent vectors are the 1st-order partial derivatives of the surface
+    skl = obj.derivatives(uv[0], uv[1], 1)
+
+    point = skl[0][0]
+    der_u = skl[1][0]
+    der_v = skl[0][1]
+
+    # Check if the 1st-order partial derivatives vanish. The magnitudes are compared relatively, so that
+    # regular surfaces of any geometric scale keep working with the 1st-order derivatives. A vanishing
+    # derivative may not be exactly zero due to floating-point round-off; in that case normalizing the
+    # residual noise would result in an arbitrary tangent direction.
+    mag_u = linalg.vector_magnitude(der_u)
+    mag_v = linalg.vector_magnitude(der_v)
+    zero_u = mag_u <= _DEGENERATE_DERIV_TOL * mag_v
+    zero_v = mag_v <= _DEGENERATE_DERIV_TOL * mag_u
+
+    # Regular parametric position: no limit analysis is required
+    if not zero_u and not zero_v:
+        return point, der_u, der_v
+
+    # Degenerate parametric position: compute the 2nd-order partial derivatives
+    skl2 = obj.derivatives(uv[0], uv[1], 2)
+    der_uu = skl2[2][0]
+    der_vv = skl2[0][2]
+    der_uv = skl2[1][1]
+
+    # Limit directions which may replace the vanishing 1st-order partial derivatives.
+    # On a collapsed edge, the 1st-order partial derivative along the edge direction approaches
+    # the mixed 2nd-order derivative, e.g. dS/dv(u0 + h, v) ~= h * d2S/dudv(u0, v) as h -> 0.
+    # The sign of a limit direction flips on the upper boundary of the parametric domain,
+    # since the degenerate boundary can only be approached from the inside, i.e. h < 0.
+    sign_u = _boundary_limit_sign(uv[0], obj.knotvector_u[obj.degree_u], obj.knotvector_u[-(obj.degree_u + 1)])
+    sign_v = _boundary_limit_sign(uv[1], obj.knotvector_v[obj.degree_v], obj.knotvector_v[-(obj.degree_v + 1)])
+    subs_u = (
+        [der_u]
+        if not zero_u
+        else [[s * d for d in der] for s, der in ((sign_u, der_uu), (sign_v, der_uv))]
+    )
+    subs_v = (
+        [der_v]
+        if not zero_v
+        else [[s * d for d in der] for s, der in ((sign_u, der_uv), (sign_v, der_vv))]
+    )
+
+    # Pick the first pair of tangent vectors which spans a well-defined tangent plane
+    for vec_u in subs_u:
+        if linalg.vector_magnitude(vec_u) == 0.0:
+            continue
+        for vec_v in subs_v:
+            if linalg.vector_magnitude(vec_v) == 0.0:
+                continue
+            if linalg.vector_magnitude(linalg.vector_cross(vec_u, vec_v)) > 0.0:
+                return point, vec_u, vec_v
+
+    # The tangent plane is not defined at this position: return the vanishing derivatives
+    return point, der_u, der_v
+
+
 def tangent_surface_single(obj, uv, normalize):
     """Evaluates the surface tangent vector at the given (u,v) parameter pair.
 
@@ -71,12 +167,11 @@ def tangent_surface_single(obj, uv, normalize):
     :return: A list in the order of "surface point", "derivative w.r.t. u" and "derivative w.r.t. v"
     :rtype: list
     """
-    # Tangent is the 1st derivative of the surface
-    skl = obj.derivatives(uv[0], uv[1], 1)
+    # Tangent is the 1st derivative of the surface (or its limit direction on degenerate positions)
+    point, der_u, der_v = _surface_tangent_frame(obj, uv)
 
-    point = skl[0][0]
-    vector_u = linalg.vector_normalize(skl[1][0]) if normalize else skl[1][0]
-    vector_v = linalg.vector_normalize(skl[0][1]) if normalize else skl[0][1]
+    vector_u = linalg.vector_normalize(der_u) if normalize else der_u
+    vector_v = linalg.vector_normalize(der_v) if normalize else der_v
 
     return tuple(point), tuple(vector_u), tuple(vector_v)
 
@@ -114,11 +209,10 @@ def normal_surface_single(obj, uv, normalize):
     :return: a list in the order of "surface point" and "normal vector"
     :rtype: list
     """
-    # Take the 1st derivative of the surface
-    skl = obj.derivatives(uv[0], uv[1], 1)
+    # Take the 1st derivative of the surface (or its limit direction on degenerate positions)
+    point, der_u, der_v = _surface_tangent_frame(obj, uv)
 
-    point = skl[0][0]
-    vector = linalg.vector_cross(skl[1][0], skl[0][1])
+    vector = linalg.vector_cross(der_u, der_v)
     vector = linalg.vector_normalize(vector) if normalize else vector
 
     return tuple(point), tuple(vector)
